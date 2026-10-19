@@ -1,0 +1,26 @@
+node_modules
+dist
+dist-ssr
+.vite
+
+# Local tooling state (never commit)
+.empryo/
+.claude/
+
+# Env — never commit real secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / editor
+.DS_Store
+.idea
+.vscode
+*.swp
+*.swo
+*.tmp
