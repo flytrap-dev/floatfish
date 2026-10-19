@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Signing you in…</title>
+    <style>
+      html,body { background:#0b0f1a; color:#e6e8ef; font-family:ui-sans-serif,system-ui,sans-serif; display:flex; align-items:center; justify-content:center; height:100%; margin:0; }
+      .box { text-align:center; padding:24px; }
+      .ring { width:36px; height:36px; border:3px solid #1d2338; border-top-color:#7c5cff; border-radius:50%; animation:spin .9s linear infinite; margin:0 auto 16px; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .err { color:#f87171; }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <div class="ring" id="ring"></div>
+      <div id="msg">Completing sign-in…</div>
+    </div>
+    <script>
+      // Parse ?code=&state=&error= from the URL, hand it to the opener, close.
+      const q = new URLSearchParams(location.search);
+      const code = q.get("code");
+      const state = q.get("state");
+      const error = q.get("error");
+      const msg = document.getElementById("msg");
+      const ring = document.getElementById("ring");
+
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage({ source: "floatfish", code, state, error }, "*");
+          msg.textContent = error ? ("Error: " + error) : "Signed in. You can close this window.";
+          ring.style.display = "none";
+          setTimeout(() => window.close(), 400);
+        } else {
+          msg.textContent = "No opener window found. Did you open this directly?";
+          msg.className = "err";
+          ring.style.display = "none";
+        }
+      } catch (e) {
+        msg.textContent = "Postback failed: " + e.message;
+        msg.className = "err";
+        ring.style.display = "none";
+      }
+    </script>
+  </body>
+</html>
