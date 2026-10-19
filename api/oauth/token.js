@@ -73,7 +73,41 @@ export default async function handler(req, res) {
     { ttl }
   );
 
-  // Also mark the client as "last_used" so the dashboard can show it.
+  // Mark the client as "last_used" and tick the per-client counter.
+  const stats = (await store.get(`key:${clientId}:stats`)) || {
+    totalSignIns: 0,
+    todaySignIns: 0,
+    todayDate: new Date().toISOString().slice(0, 10),
+    byDay: {}, // "YYYY-MM-DD": n (last 30 days)
+  };
+  const today = new Date().toISOString().slice(0, 10);
+  if (stats.todayDate !== today) {
+    stats.todayDate = today;
+    stats.todaySignIns = 0;
+  }
+  stats.totalSignIns++;
+  stats.todaySignIns++;
+  stats.byDay[today] = (stats.byDay[today] || 0) + 1;
+  // Trim byDay to last 30 keys.
+  const days = Object.keys(stats.byDay).sort();
+  while (days.length > 30) {
+    delete stats.byDay[days.shift()];
+  }
+  await store.set(`key:${clientId}:stats`, stats);
+
+  // Append to the owner's recent sign-ins log (keep last 25).
+  const logKey = `user:${client.ownerId}:recent`;
+  const recent = (await store.get(logKey)) || [];
+  recent.unshift({
+    at: Date.now(),
+    clientId,
+    clientName: client.name,
+    username: codeRec.username,
+    sub: codeRec.userId,
+  });
+  await store.set(logKey, recent.slice(0, 25));
+
+  // Mark the client itself with last-used so the keys table shows it.
   await store.set(`key:${clientId}`, { ...client, lastUsed: Date.now() });
 
   res.status(200).json({

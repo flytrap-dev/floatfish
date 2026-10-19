@@ -53,13 +53,16 @@ export function parseCookies(header) {
 }
 
 export function cookieHeader(value, { ttl = DEFAULT_TTL, clear = false } = {}) {
+  // Secure flag is only set in production. On localhost (http://) browsers
+  // silently drop Secure cookies, breaking dev auth entirely.
+  const isProd = process.env.NODE_ENV === "production" || process.env.VERCEL === "1";
   const parts = [
     `${COOKIE_NAME}=${clear ? "" : value}`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
-    "Secure",
   ];
+  if (isProd) parts.push("Secure");
   parts.push(`Max-Age=${clear ? 0 : ttl}`);
   return parts.join("; ");
 }

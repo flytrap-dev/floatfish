@@ -57,6 +57,7 @@ function devApi() {
         { match: /^\/api\/login$/,                       module: "/api/login.js" },
         { match: /^\/api\/status\/([^/?]+)/,             module: "/api/status/[requestId].js", param: "requestId" },
         { match: /^\/api\/session$/,                     module: "/api/session.js" },
+        { match: /^\/api\/analytics$/,                   module: "/api/analytics.js" },
         { match: /^\/api\/keys$/,                        module: "/api/keys.js" },
         { match: /^\/api\/oauth\/authorize$/,            module: "/api/oauth/authorize.js" },
         { match: /^\/api\/oauth\/token$/,                module: "/api/oauth/token.js" },

@@ -183,6 +183,12 @@ export async function createKey({ name, redirectUris = [] }) {
   return d;
 }
 
+export async function getAnalytics() {
+  const r = await fetch("/api/analytics", { credentials: "same-origin" });
+  if (!r.ok) throw new Error("analytics_failed");
+  return r.json();
+}
+
 export async function deleteKey(id) {
   const r = await fetch(`/api/keys?id=${encodeURIComponent(id)}`, {
     method: "DELETE",

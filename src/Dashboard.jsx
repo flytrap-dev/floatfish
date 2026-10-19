@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import LinearProgress from "./LinearProgress.jsx";
-import { listKeys, createKey, deleteKey } from "./auth.js";
+import { listKeys, createKey, deleteKey, getAnalytics } from "./auth.js";
 
 const GLogo = () => (
   <svg viewBox="0 0 48 48" width="28" height="28" aria-label="Google">
@@ -120,6 +120,42 @@ function KeyRow({ k, onRevoke }) {
       >
         {busy ? "Revoking…" : "Revoke"}
       </button>
+    </div>
+  );
+}
+
+function StatCard({ label, value, hint, icon }) {
+  return (
+    <Card className="p-5">
+      <div className="flex items-center gap-2 text-[12px] text-[#5f6368] dark:text-[#9aa0a6] uppercase tracking-wide">
+        {icon ? <Icon d={icon} size={14} /> : null}
+        {label}
+      </div>
+      <div className="mt-2 text-[28px] leading-[36px] font-normal tabular-nums">{value}</div>
+      {hint ? <div className="text-[12px] text-[#5f6368] dark:text-[#9aa0a6] mt-1 truncate">{hint}</div> : null}
+    </Card>
+  );
+}
+
+function VolumeBars({ data }) {
+  const max = Math.max(1, ...data.map((d) => d.count));
+  return (
+    <div className="flex items-end gap-1 h-24">
+      {data.map((d) => {
+        const h = Math.max(4, (d.count / max) * 96);
+        const label = new Date(d.date).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        return (
+          <div key={d.date} className="group relative flex-1 flex flex-col items-center justify-end" title={`${label}: ${d.count}`}>
+            <div
+              className="w-full rounded-t-[4px] bg-[#0b57d0] dark:bg-[#a8c7fa] group-hover:opacity-80 transition-opacity"
+              style={{ height: h + "px" }}
+            />
+            <div className="text-[10px] text-[#5f6368] dark:text-[#9aa0a6] mt-1">
+              {new Date(d.date).getDate()}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -318,14 +354,16 @@ export default function Dashboard({ user, onSignOut }) {
   const [phase, setPhase] = useState("boot");
   const [toast, setToast] = useState(false);
   const [keys, setKeys] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
   const [showNew, setShowNew] = useState(false);
   const [created, setCreated] = useState(null);
   const [loadErr, setLoadErr] = useState("");
 
   const reload = async () => {
     try {
-      const list = await listKeys();
+      const [list, a] = await Promise.all([listKeys(), getAnalytics().catch(() => null)]);
       setKeys(list);
+      if (a) setAnalytics(a);
       setLoadErr("");
     } catch (e) {
       setLoadErr(e?.message || "Could not load keys");
@@ -426,10 +464,138 @@ export default function Dashboard({ user, onSignOut }) {
               <Icon d={ICONS.warn} className="text-[#b3261e] dark:text-[#f2b8b5] mt-0.5" />
               <div>
                 <div className="text-[14px] font-medium">Couldn't load your clients</div>
-                <div className="text-[13px] text-[#5f6368] dark:text-[#9aa0a6] mt-0.5">{loadErr}</div>
+                <div className="text-[13px] text-[#5f6368] dark:text-[#9aa0a6] mt-0.5">
+                    {loadErr === "list_failed"
+                      ? "You're not signed in. Restart `npm run dev` (cookie fix just landed) and sign in again."
+                      : loadErr}
+                  </div>
               </div>
             </div>
           </Card>
+        )}
+
+        {/* Analytics summary */}
+        {analytics && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <StatCard
+              label="Sign-ins (7d)"
+              value={analytics.totals.signIns7d.toLocaleString()}
+              hint={`${analytics.totals.signIns30d.toLocaleString()} in last 30d`}
+              icon={ICONS.activity}
+            />
+            <StatCard
+              label="Unique users"
+              value={analytics.totals.uniqueUsers.toLocaleString()}
+              hint="distinct Discord IDs"
+              icon={ICONS.key}
+            />
+            <StatCard
+              label="Estimated usage"
+              value={`$${analytics.totals.estimatedUsd.toFixed(2)}`}
+              hint={analytics.totals.costModel}
+              icon={ICONS.dollar}
+            />
+            <StatCard
+              label="OAuth clients"
+              value={analytics.byClient.length.toString()}
+              hint={`${keys.length} active`}
+              icon={ICONS.settings}
+            />
+          </div>
+        )}
+
+        {/* 14-day volume chart */}
+        {analytics && analytics.byDay.length > 0 && (
+          <Card className="p-6 mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2 text-[13px] text-[#5f6368] dark:text-[#9aa0a6] uppercase tracking-wide">
+                <Icon d={ICONS.activity} size={16} />
+                Sign-ins · last 14 days
+              </div>
+              <Chip tone={analytics.totals.signIns7d > 0 ? "good" : "default"}>
+                {analytics.totals.signIns7d > 0 ? "active" : "idle"}
+              </Chip>
+            </div>
+            <VolumeBars data={analytics.byDay} />
+          </Card>
+        )}
+
+        {/* Per-client leaderboard + recent sign-ins */}
+        {analytics && (analytics.byClient.length > 0 || analytics.recent.length > 0) && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <Card className="p-6">
+              <div className="flex items-center gap-2 text-[13px] text-[#5f6368] dark:text-[#9aa0a6] uppercase tracking-wide mb-4">
+                <Icon d={ICONS.key} size={16} />
+                Top clients
+              </div>
+              {analytics.byClient.length === 0 ? (
+                <div className="text-[13px] text-[#5f6368] dark:text-[#9aa0a6] italic">
+                  No sign-ins yet. Share your client ID with a site to see traffic here.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {analytics.byClient
+                    .slice()
+                    .sort((a, b) => b.totalSignIns - a.totalSignIns)
+                    .slice(0, 5)
+                    .map((c) => {
+                      const max = Math.max(1, ...analytics.byClient.map((x) => x.totalSignIns));
+                      const pct = Math.max(4, (c.totalSignIns / max) * 100);
+                      return (
+                        <div key={c.clientId}>
+                          <div className="flex items-center justify-between text-[13px]">
+                            <span className="font-medium truncate pr-3">{c.name}</span>
+                            <span className="text-[#5f6368] dark:text-[#9aa0a6] tabular-nums">
+                              {c.totalSignIns.toLocaleString()} · ${c.estimatedUsd.toFixed(2)}
+                            </span>
+                          </div>
+                          <div className="mt-1 h-2 rounded-full bg-[#f1f3f4] dark:bg-[#2d2e30] overflow-hidden">
+                            <div
+                              className="h-full bg-[#0b57d0] dark:bg-[#a8c7fa]"
+                              style={{ width: pct + "%" }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </Card>
+
+            <Card className="p-6">
+              <div className="flex items-center gap-2 text-[13px] text-[#5f6368] dark:text-[#9aa0a6] uppercase tracking-wide mb-4">
+                <Icon d={ICONS.activity} size={16} />
+                Recent sign-ins
+              </div>
+              {analytics.recent.length === 0 ? (
+                <div className="text-[13px] text-[#5f6368] dark:text-[#9aa0a6] italic">
+                  No sign-ins yet.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[260px] overflow-y-auto -mx-2 px-2">
+                  {analytics.recent.map((r, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center gap-3 py-2 border-b border-[#e8eaed] dark:border-[#2d2e30] last:border-b-0"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-[#1a73e8] text-white flex items-center justify-center text-[12px] font-medium shrink-0">
+                        {(r.username?.[0] || "?").toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[14px] font-medium truncate">@{r.username || "unknown"}</div>
+                        <div className="text-[12px] text-[#5f6368] dark:text-[#9aa0a6] truncate">
+                          {r.clientName}
+                        </div>
+                      </div>
+                      <div className="text-[12px] text-[#5f6368] dark:text-[#9aa0a6] shrink-0 tabular-nums">
+                        {fmtAgo(r.at)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
         )}
 
 
