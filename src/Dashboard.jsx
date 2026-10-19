@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import LinearProgress from "./LinearProgress.jsx";
+import { listKeys, createKey, deleteKey } from "./auth.js";
 
 const GLogo = () => (
   <svg viewBox="0 0 48 48" width="28" height="28" aria-label="Google">
@@ -31,17 +32,20 @@ const ICONS = {
   warn: "M12 5.99 19.53 19H4.47L12 5.99M12 2 1 21h22L12 2zm1 14h-2v2h2v-2zm0-6h-2v5h2v-5z",
 };
 
-function mask(key) {
-  return key.slice(0, 7) + "•".repeat(24) + key.slice(-4);
-}
-
-const API_KEYS = [
-  { id: "key_1", name: "Production", key: "sk-prod-7c4a9e3b1d0f8a2b6e5c9d1a4f7b2e8c3a", created: "Sep 12, 2026", lastUsed: "2 minutes ago", usage: 1248.72 },
-  { id: "key_2", name: "Staging", key: "sk-stag-1f8e2d3c4b5a6978e2d3c4b5a6978e2d3c", created: "Oct 03, 2026", lastUsed: "1 hour ago", usage: 128.14 },
-  { id: "key_3", name: "Local dev", key: "sk-dev-9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e", created: "Oct 11, 2026", lastUsed: "3 days ago", usage: 4.90 },
-];
-
 const USAGE_7D = [12, 24, 18, 41, 33, 52, 47];
+
+function fmtDate(ms) {
+  if (!ms) return "—";
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+function fmtAgo(ms) {
+  if (!ms) return "Never";
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  if (s < 86400) return Math.floor(s / 3600) + " h ago";
+  return Math.floor(s / 86400) + " d ago";
+}
 
 function Chip({ children, tone = "default" }) {
   const tones = {
@@ -80,32 +84,41 @@ function CopyBtn({ text }) {
   );
 }
 
-function KeyRow({ k }) {
-  const [revealed, setRevealed] = useState(false);
+function KeyRow({ k, onRevoke }) {
+  const [busy, setBusy] = useState(false);
+  const handleRevoke = async () => {
+    if (!confirm(`Revoke "${k.name}"? Any site using it will stop working immediately.`)) return;
+    setBusy(true);
+    try {
+      await deleteKey(k.id);
+      onRevoke?.(k.id);
+    } catch {
+      setBusy(false);
+    }
+  };
   return (
-    <div className="grid grid-cols-[1.2fr_2.2fr_1fr_1fr_0.8fr_auto] gap-4 items-center px-6 py-4 border-b border-[#e8eaed] dark:border-[#2d2e30] last:border-b-0">
+    <div className="grid grid-cols-[1.2fr_2.2fr_1fr_1fr_1.5fr_auto] gap-4 items-center px-6 py-4 border-b border-[#e8eaed] dark:border-[#2d2e30] last:border-b-0">
       <div>
         <div className="text-[14px] font-medium">{k.name}</div>
         <div className="text-[12px] text-[#5f6368] dark:text-[#9aa0a6]">{k.id}</div>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 min-w-0">
         <code className="text-[13px] font-mono text-[#1f1f1f] dark:text-[#e3e3e3] truncate">
-          {revealed ? k.key : mask(k.key)}
+          {k.preview}
         </code>
-        <button
-          onClick={() => setRevealed((v) => !v)}
-          className="inline-flex items-center justify-center w-8 h-8 rounded-full hover:bg-[#f1f3f4] dark:hover:bg-[#2d2e30] text-[#5f6368] dark:text-[#9aa0a6] shrink-0"
-          title={revealed ? "Hide" : "Reveal"}
-        >
-          <Icon d={revealed ? ICONS.eyeoff : ICONS.eye} size={18} />
-        </button>
-        <CopyBtn text={k.key} />
       </div>
-      <div className="text-[14px] text-[#5f6368] dark:text-[#9aa0a6]">{k.created}</div>
-      <div className="text-[14px] text-[#5f6368] dark:text-[#9aa0a6]">{k.lastUsed}</div>
-      <div className="text-[14px] font-medium tabular-nums">${k.usage.toFixed(2)}</div>
-      <button className="text-[14px] font-medium text-[#0b57d0] dark:text-[#a8c7fa] px-3 py-2 rounded-full hover:bg-[rgba(11,87,208,0.08)] dark:hover:bg-[rgba(168,199,250,0.08)]">
-        Manage
+      <div className="text-[14px] text-[#5f6368] dark:text-[#9aa0a6]">{fmtDate(k.created)}</div>
+      <div className="text-[14px] text-[#5f6368] dark:text-[#9aa0a6]">{fmtAgo(k.lastUsed)}</div>
+      <div className="text-[13px] text-[#5f6368] dark:text-[#9aa0a6] truncate" title={(k.redirectUris || []).join("\n")}>
+        {k.redirectUris?.length ? k.redirectUris[0] : <span className="italic">no redirect URIs</span>}
+        {k.redirectUris?.length > 1 ? ` +${k.redirectUris.length - 1}` : ""}
+      </div>
+      <button
+        onClick={handleRevoke}
+        disabled={busy}
+        className="text-[14px] font-medium text-[#b3261e] dark:text-[#f2b8b5] px-3 py-2 rounded-full hover:bg-[rgba(179,38,30,0.08)] dark:hover:bg-[rgba(242,184,181,0.08)] disabled:opacity-50"
+      >
+        {busy ? "Revoking…" : "Revoke"}
       </button>
     </div>
   );
@@ -205,24 +218,130 @@ function SignedInSnackbar({ email, onClose }) {
   );
 }
 
+function NewKeyModal({ onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [redirects, setRedirects] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const submit = async () => {
+    setError("");
+    if (!name.trim()) return setError("Give the key a name");
+    setBusy(true);
+    try {
+      const uris = redirects.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+      const created = await createKey({ name: name.trim(), redirectUris: uris });
+      onCreated(created);
+    } catch (e) {
+      setError(e?.message || "Could not create key");
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white dark:bg-[#1b1b1b] rounded-[20px] w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-[20px] font-medium">New OAuth client</h2>
+        <p className="text-[13px] text-[#5f6368] dark:text-[#9aa0a6] mt-1">
+          Each client gets a <code className="font-mono">client_id</code> and <code className="font-mono">client_secret</code>. Use them from your other site to add "Sign in with FloatFish".
+        </p>
+        <label className="block mt-5 text-[12px] text-[#5f6368] dark:text-[#9aa0a6]">Name</label>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="My other site"
+          className="mt-1 w-full h-11 px-3 rounded-[8px] border border-[#dadce0] dark:border-[#5f6368] bg-transparent outline-none focus:border-[#0b57d0] dark:focus:border-[#a8c7fa] text-[14px]"
+        />
+        <label className="block mt-4 text-[12px] text-[#5f6368] dark:text-[#9aa0a6]">
+          Redirect URIs <span className="opacity-70">(one per line, where we send users back after sign-in)</span>
+        </label>
+        <textarea
+          value={redirects}
+          onChange={(e) => setRedirects(e.target.value)}
+          rows={3}
+          placeholder="https://mysite.com/floatfish-callback"
+          className="mt-1 w-full px-3 py-2 rounded-[8px] border border-[#dadce0] dark:border-[#5f6368] bg-transparent outline-none focus:border-[#0b57d0] dark:focus:border-[#a8c7fa] text-[13px] font-mono"
+        />
+        {error && <div className="mt-3 text-[13px] text-[#b3261e] dark:text-[#f2b8b5]">{error}</div>}
+        <div className="mt-6 flex justify-end gap-2">
+          <button onClick={onClose} className="h-10 px-4 rounded-full text-[14px] font-medium text-[#0b57d0] dark:text-[#a8c7fa] hover:bg-[rgba(11,87,208,0.08)]">Cancel</button>
+          <button
+            onClick={submit}
+            disabled={busy}
+            className="h-10 px-5 rounded-full bg-[#0b57d0] hover:bg-[#0a4bb8] text-white dark:bg-[#a8c7fa] dark:text-[#062e6f] dark:hover:bg-[#c2d7fc] text-[14px] font-medium disabled:opacity-50"
+          >
+            {busy ? "Creating…" : "Create client"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SecretRevealModal({ created, onClose }) {
+  return (
+    <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white dark:bg-[#1b1b1b] rounded-[20px] w-full max-w-lg p-6" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-[20px] font-medium">Save your client secret</h2>
+        <p className="text-[13px] text-[#b06000] dark:text-[#fdd663] mt-2">
+          This is the only time we'll show the secret. Copy it now and store it somewhere safe — if you lose it, you'll have to rotate the key.
+        </p>
+        <div className="mt-5 space-y-3">
+          <div>
+            <div className="text-[12px] text-[#5f6368] dark:text-[#9aa0a6]">Client ID</div>
+            <div className="flex items-center gap-2 mt-1">
+              <code className="flex-1 text-[13px] font-mono px-3 py-2 rounded-[8px] bg-[#f1f3f4] dark:bg-[#2d2e30] truncate">{created.id}</code>
+              <CopyBtn text={created.id} />
+            </div>
+          </div>
+          <div>
+            <div className="text-[12px] text-[#5f6368] dark:text-[#9aa0a6]">Client secret</div>
+            <div className="flex items-center gap-2 mt-1">
+              <code className="flex-1 text-[13px] font-mono px-3 py-2 rounded-[8px] bg-[#f1f3f4] dark:bg-[#2d2e30] truncate">{created.secret}</code>
+              <CopyBtn text={created.secret} />
+            </div>
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end">
+          <button
+            onClick={onClose}
+            className="h-10 px-5 rounded-full bg-[#0b57d0] hover:bg-[#0a4bb8] text-white dark:bg-[#a8c7fa] dark:text-[#062e6f] text-[14px] font-medium"
+          >
+            I've saved it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard({ user, onSignOut }) {
   const [phase, setPhase] = useState("boot");
   const [toast, setToast] = useState(false);
+  const [keys, setKeys] = useState([]);
+  const [showNew, setShowNew] = useState(false);
+  const [created, setCreated] = useState(null);
+  const [loadErr, setLoadErr] = useState("");
+
+  const reload = async () => {
+    try {
+      const list = await listKeys();
+      setKeys(list);
+      setLoadErr("");
+    } catch (e) {
+      setLoadErr(e?.message || "Could not load keys");
+    }
+  };
+
   useEffect(() => {
-    const t1 = setTimeout(() => setPhase("skeleton"), 700);
-    const t2 = setTimeout(() => {
+    (async () => {
+      await reload();
       setPhase("ready");
       setToast(true);
-    }, 2000);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
+    })();
   }, []);
   const [menuOpen, setMenuOpen] = useState(false);
-  const balance = 128.47;
-  const monthToDate = USAGE_7D.reduce((a, b) => a + b, 0) * 1.42;
-  const initial = (user.email.trim()[0] || "u").toUpperCase();
+  const identity = user.discord || user.email || "user";
+  const initial = (identity[0] || "u").toUpperCase();
 
   if (phase === "boot") {
     return (
@@ -241,7 +360,7 @@ export default function Dashboard({ user, onSignOut }) {
         </button>
         <div className="flex items-center gap-2 ml-1">
           <GLogo />
-          <span className="text-[20px] text-[#5f6368] dark:text-[#9aa0a6] font-google">API Console</span>
+          <span className="text-[20px] text-[#5f6368] dark:text-[#9aa0a6] font-google">FloatFish</span>
         </div>
         <div className="flex-1" />
         <div className="relative">
@@ -256,9 +375,9 @@ export default function Dashboard({ user, onSignOut }) {
               <div className="fixed inset-0" onClick={() => setMenuOpen(false)} />
               <div className="absolute right-0 mt-2 w-72 bg-white dark:bg-[#2d2e30] rounded-[12px] shadow-lg border border-[#e8eaed] dark:border-[#3c4043] py-2 z-20">
                 <div className="px-4 py-3 border-b border-[#e8eaed] dark:border-[#3c4043]">
-                  <div className="text-[14px] font-medium">{user.email}</div>
+                  <div className="text-[14px] font-medium">{user.discord ? `@${user.discord}` : user.email || "Signed in"}</div>
                   <div className="text-[12px] text-[#5f6368] dark:text-[#9aa0a6]">
-                    {user.discord ? `@${user.discord} · Google Account` : "Google Account"}
+                    {user.email ? `${user.email} · FloatFish` : "FloatFish"}
                   </div>
                 </div>
                 <button className="w-full text-left px-4 py-2 text-[14px] hover:bg-[#f1f3f4] dark:hover:bg-[#3c4043] flex items-center gap-3">
@@ -287,165 +406,117 @@ export default function Dashboard({ user, onSignOut }) {
         {/* Title row */}
         <div className="flex items-end justify-between flex-wrap gap-4 mb-6">
           <div>
-            <h1 className="text-[28px] md:text-[32px] leading-[40px] font-normal">API dashboard</h1>
+            <h1 className="text-[28px] md:text-[32px] leading-[40px] font-normal">OAuth clients</h1>
             <p className="text-[14px] text-[#5f6368] dark:text-[#9aa0a6] mt-1">
-              Manage your API keys, usage and billing.
+              Register the sites that use "Sign in with FloatFish". Each gets a client ID + secret you paste into that site's config.
             </p>
           </div>
-          <button className="h-10 px-6 rounded-full bg-[#0b57d0] hover:bg-[#0a4bb8] text-white dark:bg-[#a8c7fa] dark:text-[#062e6f] dark:hover:bg-[#c2d7fc] text-[14px] font-medium inline-flex items-center gap-2">
-            <Icon d={ICONS.plus} size={18} />
-            Create API key
-          </button>
+          <button
+            onClick={() => setShowNew(true)}
+            className="h-10 px-6 rounded-full bg-[#0b57d0] hover:bg-[#0a4bb8] text-white dark:bg-[#a8c7fa] dark:text-[#062e6f] dark:hover:bg-[#c2d7fc] text-[14px] font-medium inline-flex items-center gap-2"
+          >
+              <Icon d={ICONS.plus} size={18} />
+            New client
+            </button>
         </div>
 
-        {/* Top stats grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          {/* Balance */}
-          <Card className="md:col-span-2 p-6">
-            <div className="flex items-start justify-between gap-6">
+        {loadErr && (
+          <Card className="p-4 mb-6 border-[#f2b8b5] dark:border-[#5b1b17] bg-[#fce8e6] dark:bg-[#2a0f0d]">
+            <div className="flex items-start gap-3">
+              <Icon d={ICONS.warn} className="text-[#b3261e] dark:text-[#f2b8b5] mt-0.5" />
               <div>
-                <div className="flex items-center gap-2 text-[13px] text-[#5f6368] dark:text-[#9aa0a6] uppercase tracking-wide">
-                  <Icon d={ICONS.dollar} size={16} />
-                  Account balance
-                </div>
-                <div className="mt-2 text-[48px] leading-[56px] font-normal tabular-nums">
-                  ${balance.toFixed(2)}
-                </div>
-                <div className="mt-1 flex items-center gap-2">
-                  <Chip tone="good">Auto-recharge on</Chip>
-                  <span className="text-[13px] text-[#5f6368] dark:text-[#9aa0a6]">
-                    Tops up $50 when below $10
-                  </span>
-                </div>
-              </div>
-              <div className="flex flex-col gap-2 shrink-0">
-                <button className="h-10 px-5 rounded-full bg-[#0b57d0] hover:bg-[#0a4bb8] text-white dark:bg-[#a8c7fa] dark:text-[#062e6f] dark:hover:bg-[#c2d7fc] text-[14px] font-medium">
-                  Add credits
-                </button>
-                <button className="h-10 px-5 rounded-full border border-[#dadce0] dark:border-[#5f6368] text-[#0b57d0] dark:text-[#a8c7fa] hover:bg-[rgba(11,87,208,0.08)] dark:hover:bg-[rgba(168,199,250,0.08)] text-[14px] font-medium">
-                  Billing settings
-                </button>
-              </div>
-            </div>
-            <div className="mt-6 pt-4 border-t border-[#e8eaed] dark:border-[#2d2e30] grid grid-cols-3 gap-4">
-              <div>
-                <div className="text-[12px] text-[#5f6368] dark:text-[#9aa0a6]">Month to date</div>
-                <div className="text-[18px] font-medium tabular-nums mt-1">${monthToDate.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-[12px] text-[#5f6368] dark:text-[#9aa0a6]">Last invoice</div>
-                <div className="text-[18px] font-medium tabular-nums mt-1">$214.08</div>
-              </div>
-              <div>
-                <div className="text-[12px] text-[#5f6368] dark:text-[#9aa0a6]">Payment method</div>
-                <div className="text-[14px] mt-1">Visa •••• 4242</div>
+                <div className="text-[14px] font-medium">Couldn't load your clients</div>
+                <div className="text-[13px] text-[#5f6368] dark:text-[#9aa0a6] mt-0.5">{loadErr}</div>
               </div>
             </div>
           </Card>
+        )}
 
-          {/* Usage sparkline */}
-          <Card className="p-6">
-            <div className="flex items-center gap-2 text-[13px] text-[#5f6368] dark:text-[#9aa0a6] uppercase tracking-wide">
-              <Icon d={ICONS.activity} size={16} />
-              Requests (7d)
-            </div>
-            <div className="mt-2 flex items-end gap-2">
-              <div className="text-[32px] leading-[40px] font-normal tabular-nums">
-                {USAGE_7D.reduce((a, b) => a + b, 0).toLocaleString()}k
-              </div>
-              <div className="pb-2 text-[12px] text-[#137333] dark:text-[#81c995] font-medium flex items-center">
-                <Icon d={ICONS.arrowup} size={14} />
-                12%
-              </div>
-            </div>
-            <Sparkline data={USAGE_7D} />
-            <div className="flex justify-between text-[11px] text-[#5f6368] dark:text-[#9aa0a6] mt-1">
-              <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
-            </div>
-          </Card>
-        </div>
 
-        {/* API keys */}
+
+        {/* OAuth clients */}
         <Card className="mb-6 overflow-hidden">
           <div className="flex items-center justify-between px-6 py-4 border-b border-[#e8eaed] dark:border-[#2d2e30]">
             <div className="flex items-center gap-2">
               <Icon d={ICONS.key} size={18} className="text-[#5f6368] dark:text-[#9aa0a6]" />
-              <h2 className="text-[16px] font-medium">API keys</h2>
-              <Chip>{API_KEYS.length} active</Chip>
+              <h2 className="text-[16px] font-medium">OAuth clients</h2>
+              <Chip>{keys.length} active</Chip>
             </div>
-            <button className="text-[14px] font-medium text-[#0b57d0] dark:text-[#a8c7fa] px-3 py-2 rounded-full hover:bg-[rgba(11,87,208,0.08)] dark:hover:bg-[rgba(168,199,250,0.08)] inline-flex items-center gap-1">
-              <Icon d={ICONS.plus} size={16} />
-              New key
-            </button>
-          </div>
-          <div className="grid grid-cols-[1.2fr_2.2fr_1fr_1fr_0.8fr_auto] gap-4 px-6 py-3 text-[12px] uppercase tracking-wide text-[#5f6368] dark:text-[#9aa0a6] border-b border-[#e8eaed] dark:border-[#2d2e30]">
-            <div>Name</div>
-            <div>Key</div>
-            <div>Created</div>
-            <div>Last used</div>
-            <div>Usage</div>
-            <div></div>
-          </div>
-          {API_KEYS.map((k) => (
-            <KeyRow key={k.id} k={k} />
-          ))}
-        </Card>
-
-        {/* Alert banner */}
-        <Card className="p-4 flex items-start gap-3 mb-6 border-[#fde293] dark:border-[#3d2e00] bg-[#fef7e0] dark:bg-[#2a2200]">
-          <Icon d={ICONS.warn} className="text-[#b06000] dark:text-[#fdd663] mt-0.5" />
-          <div className="flex-1">
-            <div className="text-[14px] font-medium">Rate limit at 72% of tier maximum</div>
-            <div className="text-[13px] text-[#5f6368] dark:text-[#9aa0a6] mt-0.5">
-              You're approaching your Tier 2 limit of 3,500 requests per minute. Upgrade to raise the ceiling.
-            </div>
-          </div>
-          <button className="text-[14px] font-medium text-[#0b57d0] dark:text-[#a8c7fa] px-3 py-2 rounded-full hover:bg-[rgba(11,87,208,0.08)] dark:hover:bg-[rgba(168,199,250,0.08)]">
-            Upgrade tier
-          </button>
-        </Card>
-
-        {/* Recent activity */}
-        <Card className="overflow-hidden">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-[#e8eaed] dark:border-[#2d2e30]">
-            <h2 className="text-[16px] font-medium">Recent activity</h2>
-            <button className="text-[14px] font-medium text-[#0b57d0] dark:text-[#a8c7fa] hover:underline">View all</button>
-          </div>
-          {[
-            { t: "2 min ago", k: "Production", event: "POST /v1/chat/completions", cost: 0.013 },
-            { t: "14 min ago", k: "Production", event: "POST /v1/chat/completions", cost: 0.021 },
-            { t: "1 h ago", k: "Staging", event: "POST /v1/embeddings", cost: 0.002 },
-            { t: "3 h ago", k: "Production", event: "GET /v1/models", cost: 0.0 },
-            { t: "Yesterday", k: "Local dev", event: "POST /v1/images/generations", cost: 0.04 },
-          ].map((r, i) => (
-            <div
-              key={i}
-              className="grid grid-cols-[1fr_2fr_1fr_auto] gap-4 items-center px-6 py-3 border-b border-[#e8eaed] dark:border-[#2d2e30] last:border-b-0 text-[14px]"
+            <button
+              onClick={() => setShowNew(true)}
+              className="text-[14px] font-medium text-[#0b57d0] dark:text-[#a8c7fa] px-3 py-2 rounded-full hover:bg-[rgba(11,87,208,0.08)] dark:hover:bg-[rgba(168,199,250,0.08)] inline-flex items-center gap-1"
             >
-              <div className="text-[#5f6368] dark:text-[#9aa0a6]">{r.t}</div>
-              <code className="font-mono text-[13px] truncate">{r.event}</code>
-              <div>
-                <Chip>{r.k}</Chip>
-              </div>
-              <div className="text-right tabular-nums">${r.cost.toFixed(3)}</div>
+                <Icon d={ICONS.plus} size={16} />
+                New client
+            </button>
             </div>
-          ))}
+            {keys.length > 0 && (
+            <div className="grid grid-cols-[1.2fr_2.2fr_1fr_1fr_1.5fr_auto] gap-4 px-6 py-3 text-[12px] uppercase tracking-wide text-[#5f6368] dark:text-[#9aa0a6] border-b border-[#e8eaed] dark:border-[#2d2e30]">
+                <div>Name</div>
+                <div>Client ID / preview</div>
+                <div>Created</div>
+                <div>Last used</div>
+                <div>Redirect URI</div>
+                <div></div>
+              </div>
+          )}
+          {keys.length === 0 ? (
+            <div className="px-6 py-10 text-center">
+              <div className="text-[14px] text-[#5f6368] dark:text-[#9aa0a6]">
+                No OAuth clients yet. Create one to start embedding "Sign in with FloatFish" on your other sites.
+              </div>
+              <button
+                onClick={() => setShowNew(true)}
+                className="mt-4 h-10 px-5 rounded-full bg-[#0b57d0] hover:bg-[#0a4bb8] text-white dark:bg-[#a8c7fa] dark:text-[#062e6f] text-[14px] font-medium inline-flex items-center gap-2"
+              >
+                <Icon d={ICONS.plus} size={16} />
+                Create your first client
+              </button>
+            </div>
+          ) : (
+            keys.map((k) => <KeyRow key={k.id} k={k} onRevoke={(id) => setKeys((xs) => xs.filter((x) => x.id !== id))} />)
+          )}
+        </Card>
+
+        {/* Integration snippet */}
+        <Card className="p-6 mb-6">
+          <div className="flex items-center gap-2 text-[13px] text-[#5f6368] dark:text-[#9aa0a6] uppercase tracking-wide">
+            <Icon d={ICONS.key} size={16} />
+            Add to your site
+          </div>
+          <p className="text-[14px] mt-2">
+            Drop this on any site to let FloatFish customers sign in with their Discord identity.
+          </p>
+          <pre className="mt-3 text-[12px] font-mono bg-[#f1f3f4] dark:bg-[#2d2e30] rounded-[12px] p-4 overflow-x-auto">
+{`<script src="${typeof window !== "undefined" ? window.location.origin : "https://floatfish.app"}/sdk.js"></script>
+<button onclick="FloatFish.signIn({
+  clientId: 'YOUR_CLIENT_ID',
+  redirectUri: 'https://yoursite.com/floatfish-callback',
+  onSuccess: ({ code }) => fetch('/api/floatfish-callback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  }),
+})">Sign in with FloatFish</button>`}
+          </pre>
         </Card>
 
         <footer className="mt-12 mb-6 flex flex-wrap items-center justify-between gap-3 text-[12px] text-[#5f6368] dark:text-[#9aa0a6]">
-          <span>© 2026 API Console</span>
+            <span>© {new Date().getFullYear()} FloatFish</span>
           <div className="flex gap-6">
-            <a href="#" className="hover:underline">Docs</a>
+              <a href="#" className="hover:underline">Docs</a>
             <a href="#" className="hover:underline">Status</a>
             <a href="#" className="hover:underline">Help</a>
-            <a href="#" className="hover:underline">Privacy</a>
+              <a href="#" className="hover:underline">Privacy</a>
             <a href="#" className="hover:underline">Terms</a>
           </div>
-        </footer>
-        </div>
-        )}
-      </main>
-      {toast && <SignedInSnackbar email={user.email} onClose={() => setToast(false)} />}
-    </div>
-  );
-}
+          </footer>
+          </div>
+          )}
+        </main>
+        {showNew && <NewKeyModal onClose={() => setShowNew(false)} onCreated={(c) => { setShowNew(false); setCreated(c); reload(); }} />}
+        {created && <SecretRevealModal created={created} onClose={() => setCreated(null)} />}
+        {toast && <SignedInSnackbar email={identity} onClose={() => setToast(false)} />}
+      </div>
+    );
+  }

@@ -138,15 +138,57 @@ export async function requestAccess({ email, discord, signal } = {}) {
     if (state === "denied" || data?.allowed === false) {
       return { allowed: false, reason: reasonForStatus(403, data) };
     }
-    // "pending" → bot is checking. If a VITE_LOGIN_API_URL is set, poll the
-    // bot backend for a terminal decision; otherwise the webhook ack IS the
-    // signal (your bot will see it in Discord) and the user is let through.
-    if (API_URL) {
-      return pollStatus(effectiveId, { signal });
-    }
-    return { allowed: true, requestId: effectiveId };
+    // "pending" → bot is checking. Poll /api/status/<id> until it decides.
+    // The server flips the record to approved/denied; approved sets the fls cookie.
+    return pollStatus(effectiveId, { signal });
   }
 
   return { allowed: false, reason: reasonForStatus(res.status, data) };
+}
+
+// ── session + keys helpers (used by Dashboard) ──────────────────────────────
+
+export async function getSession() {
+  try {
+    const r = await fetch("/api/session", { credentials: "same-origin" });
+    const d = await r.json();
+    return d?.user || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function signOut() {
+  try {
+    await fetch("/api/session", { method: "DELETE", credentials: "same-origin" });
+  } catch {}
+}
+
+export async function listKeys() {
+  const r = await fetch("/api/keys", { credentials: "same-origin" });
+  if (!r.ok) throw new Error("list_failed");
+  const d = await r.json();
+  return d.keys || [];
+}
+
+export async function createKey({ name, redirectUris = [] }) {
+  const r = await fetch("/api/keys", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, redirectUris }),
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d?.error || "create_failed");
+  return d;
+}
+
+export async function deleteKey(id) {
+  const r = await fetch(`/api/keys?id=${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+  });
+  if (!r.ok) throw new Error("delete_failed");
+  return r.json();
 }
 

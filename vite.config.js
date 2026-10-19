@@ -1,103 +1,116 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
-import { buildEmbed, clientIpFromHeaders, enrichIp } from "./api/enrich.js";
 
-// Dev-only middleware. Keeps the webhook URL on the server side even in
-// `vite dev`, so it never ends up in bundled JS or network inspector URLs.
-function devLoginApi(env) {
+// Dev-only API router. Loads each serverless handler and adapts Vite's Node
+// req/res into the Vercel-shape (req.body/query, res.status().json()) so the
+// same handlers work in `vite dev` and in prod on Vercel without duplication.
+function devApi() {
   return {
-    name: "dev-login-api",
-    configureServer(server) {
-      const webhookPreview = env.DISCORD_WEBHOOK_URL
-        ? env.DISCORD_WEBHOOK_URL.slice(0, 42) + "…(len=" + env.DISCORD_WEBHOOK_URL.length + ")"
-        : "MISSING";
-      console.log("[dev-login-api] loaded. DISCORD_WEBHOOK_URL=" + webhookPreview);
-      console.log("[dev-login-api] node fetch available: " + (typeof fetch === "function"));
+    name: "dev-api",
+    async configureServer(server) {
+      async function load(path) {
+        const m = await server.ssrLoadModule(path);
+        return m.default;
+      }
 
-      server.middlewares.use("/api/login", async (req, res) => {
-        console.log("[dev-login-api] " + req.method + " /api/login");
-        if (req.method !== "POST") {
-          res.statusCode = 405;
+      // Wrap a Node (req, res) with Vercel-style helpers.
+      function wrap(req, res, body, query) {
+        req.body = body;
+        req.query = query;
+        res.status = (c) => {
+          res.statusCode = c;
+          return res;
+        };
+        res.json = (obj) => {
           res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: "method_not_allowed" }));
-          return;
-        }
-        let raw = "";
-        req.on("data", (c) => (raw += c));
-        req.on("end", async () => {
-          const webhook = env.DISCORD_WEBHOOK_URL;
-          if (!webhook) {
-            console.error("[dev-login-api] DISCORD_WEBHOOK_URL is empty — .env.local not loaded?");
+          res.end(JSON.stringify(obj));
+          return res;
+        };
+      }
+
+      async function readBody(req) {
+        return new Promise((resolve) => {
+          let raw = "";
+          req.on("data", (c) => (raw += c));
+          req.on("end", () => {
+            const ct = (req.headers["content-type"] || "").toLowerCase();
+            if (!raw) return resolve({});
+            if (ct.includes("application/json")) {
+              try { return resolve(JSON.parse(raw)); } catch { return resolve({}); }
+            }
+            if (ct.includes("application/x-www-form-urlencoded")) {
+              const out = {};
+              for (const pair of raw.split("&")) {
+                const [k, v] = pair.split("=");
+                if (k) out[decodeURIComponent(k)] = decodeURIComponent((v || "").replace(/\+/g, " "));
+              }
+              return resolve(out);
+            }
+            resolve(raw);
+          });
+        });
+      }
+
+      // Route table — order matters (more specific first).
+      const routes = [
+        { match: /^\/api\/login\/approve$/,              module: "/api/login/approve.js" },
+        { match: /^\/api\/login$/,                       module: "/api/login.js" },
+        { match: /^\/api\/status\/([^/?]+)/,             module: "/api/status/[requestId].js", param: "requestId" },
+        { match: /^\/api\/session$/,                     module: "/api/session.js" },
+        { match: /^\/api\/keys$/,                        module: "/api/keys.js" },
+        { match: /^\/api\/oauth\/authorize$/,            module: "/api/oauth/authorize.js" },
+        { match: /^\/api\/oauth\/token$/,                module: "/api/oauth/token.js" },
+        { match: /^\/api\/oauth\/userinfo$/,             module: "/api/oauth/userinfo.js" },
+      ];
+
+      server.middlewares.use(async (req, res, next) => {
+        if (!req.url?.startsWith("/api/")) return next();
+        const url = new URL(req.url, "http://x");
+        const path = url.pathname;
+
+        const hit = routes.find((r) => r.match.test(path));
+        if (!hit) return next();
+
+        try {
+          const body = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method)
+            ? await readBody(req)
+            : undefined;
+          const query = Object.fromEntries(url.searchParams);
+          if (hit.param) {
+            const m = path.match(hit.match);
+            if (m && m[1]) query[hit.param] = decodeURIComponent(m[1]);
+          }
+          wrap(req, res, body, query);
+          const handler = await load(hit.module);
+          await handler(req, res);
+        } catch (e) {
+          console.error("[dev-api]", req.method, path, e);
+          if (!res.writableEnded) {
             res.statusCode = 500;
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "webhook_not_configured" }));
-            return;
+            res.end(JSON.stringify({ error: "handler_crashed", detail: String(e?.message || e) }));
           }
-          let body = {};
-          try {
-            body = raw ? JSON.parse(raw) : {};
-          } catch {
-            res.statusCode = 400;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "bad_json" }));
-            return;
-          }
-          const username = String(body.username || "").slice(0, 64);
-          const email = String(body.email || "").slice(0, 254);
-          const requestId = String(body.requestId || "").slice(0, 128);
-          const ua = String(req.headers["user-agent"] || "unknown").slice(0, 500);
-
-          const rawIp = clientIpFromHeaders(req.headers, req.socket?.remoteAddress);
-          const { ip, geo, localFallback } = await enrichIp(rawIp);
-          console.log("[dev-login-api] ip=" + ip + " geo=" + (geo?.country || "n/a") + " localFallback=" + localFallback);
-
-          const payload = buildEmbed({ username, email, requestId, ip, geo, ua, localFallback });
-
-          try {
-            console.log("[dev-login-api] posting to Discord…");
-            const dres = await fetch(webhook, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            });
-            console.log("[dev-login-api] discord status=" + dres.status);
-            if (!dres.ok) {
-              const text = await dres.text().catch(() => "");
-              console.error("[dev-login-api] discord error body: " + text.slice(0, 500));
-              res.statusCode = 502;
-              res.setHeader("Content-Type", "application/json");
-              res.end(
-                JSON.stringify({
-                  error: "webhook_failed",
-                  status: dres.status,
-                  discord: text.slice(0, 500),
-                })
-              );
-              return;
-            }
-          } catch (e) {
-            console.error("[dev-login-api] webhook_unreachable: " + (e?.message || e));
-            res.statusCode = 502;
-            res.setHeader("Content-Type", "application/json");
-            res.end(
-              JSON.stringify({ error: "webhook_unreachable", detail: String(e?.message || e) })
-            );
-            return;
-          }
-
-          res.statusCode = 202;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ status: "pending", requestId }));
-        });
+        }
       });
     },
   };
 }
 
 export default defineConfig(({ mode }) => {
+  // loadEnv populates process.env for the API handlers (Vercel-style).
   const env = loadEnv(mode, process.cwd(), "");
+  for (const [k, v] of Object.entries(env)) {
+    if (!(k in process.env)) process.env[k] = v;
+  }
+  if (!process.env.DISCORD_WEBHOOK_URL) {
+    console.warn("[dev] DISCORD_WEBHOOK_URL not set — /api/login will return webhook_not_configured.");
+  }
+  if (!process.env.BOT_SHARED_SECRET) {
+    console.warn("[dev] BOT_SHARED_SECRET not set — /api/login/approve will return bot_secret_not_configured.");
+  }
+
   return {
-    plugins: [react(), devLoginApi(env)],
+    plugins: [react(), devApi()],
     server: { port: 5173, host: true },
   };
 });

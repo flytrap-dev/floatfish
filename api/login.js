@@ -2,6 +2,7 @@
 // Holds DISCORD_WEBHOOK_URL in server env; the browser never sees it.
 
 import { buildEmbed, clientIpFromHeaders, enrichIp } from "./enrich.js";
+import { store } from "./_store.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -55,6 +56,30 @@ export default async function handler(req, res) {
   } catch (e) {
     res.status(502).json({ error: "webhook_unreachable", detail: String(e?.message || e) });
     return;
+  }
+
+  // Record the pending request so /api/status/<id> can find it, and so the
+  // bot's /api/login/approve has something to flip.
+  await store.set(
+    `login:${requestId}`,
+    { status: "pending", username, email, createdAt: Date.now() },
+    { ttl: 5 * 60 }
+  );
+
+  // Dev shortcut: when DEV_AUTO_APPROVE=1 is set, auto-approve the request
+  // immediately so you can click through the whole dashboard flow without
+  // needing the Discord bot online. NEVER set this in production.
+  if (process.env.DEV_AUTO_APPROVE === "1") {
+    await store.set(
+      `login:${requestId}`,
+      {
+        status: "approved",
+        discordId: "dev_" + username,
+        discordUsername: username,
+        decidedAt: Date.now(),
+      },
+      { ttl: 5 * 60 }
+    );
   }
 
   res.status(202).json({ status: "pending", requestId });

@@ -1,17 +1,36 @@
 # Environment variables
 
-The Discord webhook URL **never ships to the browser**. The client only ever
-calls same-origin `/api/login`, which is handled server-side (dev: Vite
-middleware in `vite.config.js`; prod: serverless function `api/login.js`).
+Nothing with a secret ever ships to the browser. The client only hits same-origin
+`/api/*`, which is handled server-side (dev: Vite middleware in `vite.config.js`,
+prod: serverless functions in `api/`).
 
 ## Local dev — `.env.local` (gitignored)
 
 ```
-# Server-only — NO VITE_ prefix, so Vite will refuse to expose it to the client.
+# ── required ──────────────────────────────────────────────────────────────
+# Discord webhook for login telemetry embeds.
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/<id>/<token>
+
+# Shared secret between this server and your Discord bot. The bot sends it
+# as `Authorization: Bearer <value>` when POSTing /api/login/approve.
+BOT_SHARED_SECRET=generate-a-long-random-string
+
+# HMAC secret used to sign session cookies (fls). Rotate = sign everyone out.
+SESSION_SECRET=generate-another-long-random-string
+
+# ── optional ──────────────────────────────────────────────────────────────
+# Dev shortcut: when "1", /api/login auto-approves every request so you can
+# click through the dashboard without the bot running. NEVER set in prod.
+DEV_AUTO_APPROVE=1
+
+# Vercel KV (auto-injected by Vercel when you attach a KV store to the
+# project — don't set manually unless pointing at your own Upstash).
+KV_REST_API_URL=
+KV_REST_API_TOKEN=
 ```
 
-Then `npm run dev` and the webhook posts come from the Node process, not the browser.
+Then `npm run dev`. Without KV env vars the server uses an in-memory store
+(data lost on restart) — fine for local prototyping.
 
 ## Production — set in your host's env dashboard
 
